@@ -1,0 +1,12 @@
+# GL.iNet GL-AR150 [https://openwrt.org/toh/gl.inet/gl-ar150]
+rsync -avr --exclude=".git" ../../dcmonitoring-files/* ../../_files --delete
+echo "/root/init/init_atrh" >  ../../_files/etc/uci-defaults/99-dcfirmware
+
+RELEASE='23.05.2'
+TARGET='ramips/mt76x8'
+PROFILE=tplink_tl-mr3020-v3
+PACKAGES="-kmod-ppoe -ppp-mod-pppoe chat comgt kmod-usb-acm kmod-usb-atm kmod-usb-atm-cxacru kmod-usb-atm-speedtouch kmod-usb-atm-ueagle kmod-usb-cm109 kmod-usb-core kmod-usb-net kmod-usb-net-asix kmod-usb-net-cdc-ether kmod-usb-net-dm9601-ether kmod-usb-net-hso kmod-usb-net-kaweth kmod-usb-net-mcs7830 kmod-usb-net-pegasus kmod-usb-net-rndis kmod-usb-net-sierrawireless kmod-usb-ohci kmod-usb-serial kmod-usb-serial-ark3116 kmod-usb-serial-belkin kmod-usb-serial-ch341 kmod-usb-serial-cp210x kmod-usb-serial-cypress-m8 kmod-usb-serial-ftdi kmod-usb-serial-ipw kmod-usb-serial-keyspan kmod-usb-serial-mct kmod-usb-serial-mos7720 kmod-usb-serial-option kmod-usb-serial-oti6858 kmod-usb-serial-pl2303 kmod-usb-serial-qualcomm kmod-usb-serial-sierrawireless kmod-usb-serial-ti-usb kmod-usb-serial-visor kmod-usb-serial-wwan kmod-usb2 lua luasocket luafilesystem libuci-lua resolveip uhttpd usb-modeswitch picocom libuci libuci-lua coreutils-stty kmod-hid kmod-usb-hid mosquitto-client usbutils kmod-usb-storage micropython micropython-lib lua-mosquitto lua-libmodbus lua-rs232 json4lua lua-bit32 luaposix mosquitto chrony block-mount kmod-fs-vfat "
+DISABLED_SERVICES="firewall dnsmasq sysntpd"
+FILES='../../_files'
+EXTRA_IMAGE_NAME="SHMS-ATRH"
+DESTINATION='../../_firmware'

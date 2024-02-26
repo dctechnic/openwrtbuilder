@@ -1,2 +1,4 @@
 openwrt-*/
 openwrt-*.bin
+_files
+_firmware
