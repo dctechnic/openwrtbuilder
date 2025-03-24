@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+set -e
+
+# Copyright (c) 2019 Anton Semjonov
+# Licensed under the MIT License
+
+# set defaults
+MIRROR="https://downloads.openwrt.org"
+RELEASE="latest"
+#TARGET="ramips/mt7621"
+#PROFILE="ubiquiti_edgerouterx"
+#PACKAGES="-ppp -ppp-mod-pppoe -luci-proto-ppp luci-ssl wireguard luci-proto-wireguard"
+DESTINATION="."
+FILES=""
+COMMAND=""
+VERBOSE=false
+
+# print an error to stderr
+err() { printf 'err: %s\n' "$*" >&2; }
+
+# print usage information
+usage() {
+cat <<-HELP
+usage: $(basename "$0") [options]
+
+configure build target:
+  -r RELEASE    build a specific version ($RELEASE)
+  -t TARGET     build for a specific target ($TARGET)
+  -p PROFILE    build a specific profile ($PROFILE)
+  -i PACKAGES   include packages in firmware ($(printf '%.30s..' "$PACKAGES"))
+  -d DEST       export built firmware to directory ($DESTINATION)
+  -f DIRECTORY  include files in directory in firmware
+  -c CONFIG     source configuration from this file
+  -v            be verbose, enable debugging
+
+only list ... and exit:
+  -R            list releases from $MIRROR
+  -T            list targets for selected release
+  -P            list profiles for selected target
+
+HELP
+}
+
+# get a list of available releases
+get_releases() {
+  echo "snapshots"
+  curl -fs "$MIRROR/releases/" |\
+  sed -n 's:.*a href="\([a-z0-9.-]\+\)/\?".*:\1:p' |\
+  grep -vE '^(faillogs|packages)' |\
+  sort -rV;
+}
+list_releases() {
+  echo "available releases from $MIRROR:"
+  get_releases | xargs -rn1 printf ' - %s\n';
+}
+
+# get a list of profiles for a given target
+list_profiles() {
+  echo "available profiles for $RELEASE/$TARGET:"
+  curl -fs "${CONFIGINFO}" |\
+  sed -n 's/^CONFIG_TARGET_DEVICE_\(.*\)_DEVICE_\(.*\)=y$/\2/p' |\
+  sort |\
+  xargs -rn1 printf ' - %s\n';
+}
+
+# get a list of targets by recursively parsing dirlist
+list_targets() {
+  echo "available targets for $RELEASE:"
+  curl -sfL "$TARGETS" |\
+  sed -n 's/.*class="n"><a href="\([^"]\+\)\/".*/\1/p' |\
+  while read arch; do 
+    curl -sfL "$TARGETS/$arch" |\
+    sed -n 's/.*class="n"><a href="\([^"]\+\)\/".*/ - '"${arch//\//\\/}"'\/\1/p';
+  done;
+}
+
+# maybe source config in current directory
+if [[ -r owrtbuildconf ]]; then
+  source owrtbuildconf
+fi
+
+# parse commandline arguments
+[[ $1 == --help ]] && { usage; exit 0; }
+while getopts "hr:t:p:i:f:d:c:vRTP" opt; do
+  case "$opt" in
+    r) RELEASE=$OPTARG ;;
+    t) TARGET=$OPTARG ;;
+    p) PROFILE=$OPTARG ;;
+    i) PACKAGES=$OPTARG ;;
+    d) DESTINATION=$OPTARG ;;
+    f) FILES=$OPTARG ;;
+    c) source "$OPTARG" ;;
+    R) COMMAND="list_releases";;
+    T) COMMAND="list_targets";;
+    P) COMMAND="list_profiles";;
+    v) VERBOSE="true";;
+    h) usage; exit 0; ;;
+    \?) exit 1; ;;
+  esac
+done
+
+# check for required variables
+required() {
+  local e=0
+  for var in "$@"; do
+    if [[ -z ${!var} ]]; then
+      err "variable $var is required"; e=1;
+    fi
+  done
+  if [[ $e -ne 0 ]]; then
+    usage >&2
+    exit $e
+  fi
+}
+
+# maybe enable debugging
+if [[ $VERBOSE == true ]]; then
+  set -x
+fi
+
+# normalize snaphots naming
+[[ $RELEASE == snapshots ]] && RELEASE="snapshot"
+# or retrieve latest release version
+[[ $RELEASE == latest ]] && RELEASE="$(get_releases | grep -vE "(snapshot|-rc)" | head -1)"
+
+# construct paths for release/target combination
+if [[ $RELEASE == snapshot ]]; then
+  TARGETS="${MIRROR}/snapshots/targets"
+  TARGETDIR="${TARGETS}/${TARGET}"
+  IMAGEBUILDER="${TARGETDIR}/openwrt-imagebuilder-${TARGET////-}.Linux-x86_64.tar.xz"
+  CONFIGINFO="${TARGETDIR}/config.buildinfo"
+else
+  TARGETS="${MIRROR}/releases/${RELEASE}/targets"
+  TARGETDIR="${TARGETS}/${TARGET}"
+  IMAGEBUILDER="${TARGETDIR}/openwrt-imagebuilder-${RELEASE}-${TARGET////-}.Linux-x86_64.tar.xz"
+  CONFIGINFO="${TARGETDIR}/config.buildinfo"
+fi
+
+# maybe execute a 'list' command
+if [[ -n $COMMAND ]]; then
+  case "$COMMAND" in
+    list_releases) list_releases; exit $?;;
+    list_targets)  required RELEASE; list_targets; exit $?;;
+    list_profiles) required RELEASE TARGET; list_profiles; exit $?;;
+    *) echo "unknown command: $COMMAND"; exit 1;;
+  esac
+fi
+
+# check if all required arguments are present
+required RELEASE TARGET PROFILE DESTINATION
+
+# get imagebuilder version information
+if [[ $RELEASE == snapshot ]]; then
+  VERSIONINFO="snapshot-$(curl -sf "${TARGETDIR}/version.buildinfo" || date --utc +%F)"
+else
+  VERSIONINFO="$RELEASE"
+fi
+
+# print reusable build information
+cat <<EOF
+
+# openwrtbuilder configuration
+MIRROR=${MIRROR@Q}
+RELEASE=${RELEASE@Q}
+TARGET=${TARGET@Q}
+PROFILE=${PROFILE@Q}
+PACKAGES=${PACKAGES@Q}
+FILES=${FILES@Q}
+
+EOF
+
+# resolve absolute directories
+[[ -n $FILES ]] && FILES=$(readlink -vf "$FILES")
+
+# construct the build output path
+DESTINATION="$(readlink -vf "$DESTINATION")/openwrt-${TARGET////-}-${PROFILE}-${VERSIONINFO}"
+
+# switch to a temporary directory
+tmp=$(mktemp --tmpdir -d openwrtbuilder-XXXXXX)
+trap "rm -rf $tmp" EXIT
+cd "$tmp"
+
+# maybe copy context files
+if [[ -n $FILES ]]; then
+  # fail if it's not a directory
+  if [[ ! -d $FILES ]]; then
+    echo "not a directory: $FILES" >&2
+    exit 1
+  fi
+  cp -r --reflink=auto "$FILES" ./files/
+fi
+
+# what tool to use for building
+export DOCKER_BUILDKIT=1
+BUILDER="docker"
+
+# build and cache the builder container with signing keys
+echo '# build openwrtbuilder image ...'
+$BUILDER build $([[ $VERBOSE == true ]] && echo --progress plain) -t openwrtbuilder - <<'DOCKERFILE'
+
+# use debian linux base
+FROM ubuntu:20.04
+ARG DEBIAN_FRONTEND=noninteractive
+# install required software and libraries
+RUN apt-get update \
+ && apt-get install -y \
+   build-essential \
+   libncurses5-dev \
+   zlib1g-dev \
+   gawk \
+   git \
+   gettext \
+   libssl-dev \
+   xsltproc \
+   wget \
+   unzip \
+   python \
+   python3 \
+   file \
+   curl \
+   xxd \
+   signify-openbsd \
+   rsync
+
+# download openwrt keyring with usign keys
+RUN git clone https://git.openwrt.org/keyring.git /keyring
+
+DOCKERFILE
+
+# write out a dockerfile dynamically
+echo -e '\n# build firmware ...'
+cat > Dockerfile <<DOCKERFILE
+
+# use cached builder image
+FROM openwrtbuilder as firmware
+
+# use a download directory
+WORKDIR /download
+
+# cache busting for new versions
+ENV VERSIONINFO=${VERSIONINFO}
+
+# download imagebuilder and signed checksums
+ADD "${IMAGEBUILDER}"             /download/
+ADD "${TARGETDIR}/sha256sums"     /download/
+ADD "${TARGETDIR}/sha256sums.sig" /download/
+
+# verify signature and checksum
+RUN \
+  pk=\$(sed 1d sha256sums.sig | base64 -d | tail -c +3 | xxd -ps -l 8) && \
+  signify-openbsd -Vm sha256sums -p "/keyring/usign/\$pk" && \
+  sha256sum --check sha256sums --ignore-missing
+
+# switch to build directory
+WORKDIR /build
+
+# extract imagebuilder
+RUN tar xf "/download/$(basename "$IMAGEBUILDER")" --strip-components=1
+
+$(if [[ -n $FILES ]]; then cat << FILES
+# copy files to be included
+COPY ./files /files
+FILES
+fi)
+
+# make image
+RUN make image  EXTRA_IMAGE_NAME=${EXTRA_IMAGE_NAME@Q}  DISABLED_SERVICES=${DISABLED_SERVICES@Q}  PROFILE=${PROFILE@Q} PACKAGES=${PACKAGES@Q} $([[ -n $FILES ]] && echo "FILES=/files")
+
+# move built firmware to empty stage
+FROM scratch
+COPY --from=firmware "/build/bin/targets/$TARGET" "/"
+DOCKERFILE
+
+# build firmware
+$BUILDER build $([[ $VERBOSE == true ]] && echo --progress plain) -o "type=local,dest=$DESTINATION" ./
+echo -e "\n# written to: $DESTINATION"
